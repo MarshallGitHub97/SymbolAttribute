@@ -1,11 +1,12 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import { Stage, Layer, Rect, Text, Line, Group } from 'react-konva';
-import { useDerivedCircuits, useNetzKonfigurationen } from '../../store/useAppStore';
+import { useDerivedCircuits, useNetzKonfigurationen, useRcdGroups, useAppStore } from '../../store/useAppStore';
 import { findDevice, CABINET_TE_PER_ROW } from '../../data/cabinetCatalog';
-import { groupBySharedRcd, circuitDevicesWithoutRcd } from '../../logic/rcdGrouping';
-import { findNetzForVerteiler, resolveUpstreamDevices } from '../../logic/netzUpstream';
+import { circuitDevicesWithoutRcd } from '../../logic/rcdGrouping';
+import { findAllNetzeForVerteiler, resolveUpstreamDevices } from '../../logic/netzUpstream';
 import type { NetzKonfiguration } from '../../types';
 import { NETZFORM_LABELS } from '../../types';
+import { StromlaufplanContextMenu } from './StromlaufplanContextMenu';
 
 const TE_PX = 30;
 const ROW_H = 50;
@@ -22,6 +23,8 @@ interface PlacedDevice {
   color: string;
   isShared: boolean;
   isUpstream: boolean;
+  circuitId?: string;
+  verteilerId?: string;
 }
 
 export function Aufbauplan() {
@@ -29,6 +32,13 @@ export function Aufbauplan() {
   const [dims, setDims] = useState({ width: 800, height: 600 });
   const derivedCircuits = useDerivedCircuits();
   const netzKonfigurationen = useNetzKonfigurationen();
+  const rcdGroups = useRcdGroups();
+  const setRcdGroupOverride = useAppStore((s) => s.setRcdGroupOverride);
+  const rcdGroupOverrides = useAppStore((s) => s.rcdGroupOverrides);
+
+  const [ctxMenu, setCtxMenu] = useState<{
+    circuitId: string; x: number; y: number; verteilerId: string; currentGroupId: string | null;
+  } | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -50,21 +60,20 @@ export function Aufbauplan() {
       byVerteiler.set(c.verteilerId, arr);
     }
 
-    const rcdGroups = groupBySharedRcd(derivedCircuits);
     const circuitToRcdGroup = new Map<string, typeof rcdGroups[0]>();
     for (const g of rcdGroups) {
       for (const cid of g.circuitIds) circuitToRcdGroup.set(cid, g);
     }
 
-    const layouts: { name: string; devices: PlacedDevice[]; netz: NetzKonfiguration | undefined }[] = [];
+    const layouts: { name: string; devices: PlacedDevice[]; netze: NetzKonfiguration[] }[] = [];
 
     for (const [name, circuits] of byVerteiler) {
       const devices: PlacedDevice[] = [];
       const placedRcdGroupIds = new Set<string>();
 
-      // Upstream devices from NetzKonfiguration
-      const netz = findNetzForVerteiler(netzKonfigurationen, name);
-      if (netz) {
+      // Upstream devices from ALL linked NetzKonfigurationen
+      const netze = findAllNetzeForVerteiler(netzKonfigurationen, name);
+      for (const netz of netze) {
         const upstream = resolveUpstreamDevices(netz);
         for (const ud of upstream) {
           if (ud.teWidth <= 0) continue; // skip Einspeisung (no DIN rail footprint)
@@ -129,6 +138,8 @@ export function Aufbauplan() {
             color,
             isShared: false,
             isUpstream: false,
+            circuitId: circuit.id,
+            verteilerId: circuit.verteilerId,
           });
         }
       }
@@ -146,10 +157,10 @@ export function Aufbauplan() {
         totalTE += d.teWidth;
       }
 
-      layouts.push({ name, devices, netz });
+      layouts.push({ name, devices, netze });
     }
     return layouts;
-  }, [derivedCircuits, netzKonfigurationen]);
+  }, [derivedCircuits, netzKonfigurationen, rcdGroups]);
 
   const LEFT = 40;
   const TOP = 60;
@@ -157,7 +168,7 @@ export function Aufbauplan() {
 
   let totalHeight = TOP;
   for (const layout of verteilerLayouts) {
-    const headerH = layout.netz ? HEADER_H_WITH_NETZ : HEADER_H_BASE;
+    const headerH = layout.netze.length > 0 ? HEADER_H_WITH_NETZ : HEADER_H_BASE;
     const maxRow = Math.max(0, ...layout.devices.map(d => d.row));
     totalHeight += headerH + (maxRow + 1) * ROW_H + CABINET_GAP;
   }
@@ -167,17 +178,18 @@ export function Aufbauplan() {
   let yOffset = TOP;
 
   return (
-    <div ref={containerRef} className="w-full h-full overflow-auto bg-white">
+    <div ref={containerRef} className="relative w-full h-full overflow-auto bg-white">
       {verteilerLayouts.length === 0 ? (
         <div className="flex items-center justify-center h-full text-gray-400">
           Keine Stromkreise abgeleitet.
         </div>
       ) : (
+        <>
         <Stage width={totalWidth} height={totalHeight}>
           <Layer>
             <Text text="Aufbauplan" x={LEFT} y={15} fontSize={18} fontStyle="bold" fill="#1f2937" />
             {verteilerLayouts.map((layout, vi) => {
-              const headerH = layout.netz ? HEADER_H_WITH_NETZ : HEADER_H_BASE;
+              const headerH = layout.netze.length > 0 ? HEADER_H_WITH_NETZ : HEADER_H_BASE;
               const maxRow = Math.max(0, ...layout.devices.map(d => d.row));
               const cabinetH = headerH + (maxRow + 1) * ROW_H + 10;
               const startY = yOffset;
@@ -190,9 +202,9 @@ export function Aufbauplan() {
                   {/* Cabinet header */}
                   <Rect x={LEFT} y={startY} width={CABINET_TE_PER_ROW * TE_PX + 20} height={headerH} fill="#374151" cornerRadius={[4, 4, 0, 0]} />
                   <Text text={layout.name} x={LEFT + 10} y={startY + 10} fontSize={14} fontStyle="bold" fill="white" />
-                  {layout.netz && (
+                  {layout.netze.length > 0 && (
                     <Text
-                      text={`${NETZFORM_LABELS[layout.netz.einspeisung.netzform]} | ${layout.netz.leitungstyp} ${layout.netz.querschnitt}mm²`}
+                      text={layout.netze.map((n) => `${n.bezeichnung} (${NETZFORM_LABELS[n.einspeisung.netzform]}, ${n.leitungstyp} ${n.querschnitt}mm²)`).join(' | ')}
                       x={LEFT + 10} y={startY + 27} fontSize={10} fill="#d1d5db"
                     />
                   )}
@@ -210,7 +222,23 @@ export function Aufbauplan() {
                     const strokeColor = d.isUpstream ? '#065f46' : d.isShared ? '#92400e' : '#6b7280';
                     const strokeW = d.isUpstream || d.isShared ? 2 : 1;
                     return (
-                      <Group key={di}>
+                      <Group
+                        key={di}
+                        onContextMenu={d.circuitId ? (e) => {
+                          e.evt.preventDefault();
+                          const stage = e.target.getStage();
+                          const pos = stage?.getPointerPosition();
+                          if (!pos || !d.circuitId || !d.verteilerId) return;
+                          const override = rcdGroupOverrides.find((o) => o.circuitId === d.circuitId);
+                          setCtxMenu({
+                            circuitId: d.circuitId,
+                            x: pos.x,
+                            y: pos.y,
+                            verteilerId: d.verteilerId,
+                            currentGroupId: override?.rcdGroupId ?? null,
+                          });
+                        } : undefined}
+                      >
                         <Rect
                           x={dx} y={dy} width={w} height={28}
                           fill={d.color}
@@ -228,6 +256,22 @@ export function Aufbauplan() {
             })}
           </Layer>
         </Stage>
+        {ctxMenu && (
+          <StromlaufplanContextMenu
+            x={ctxMenu.x}
+            y={ctxMenu.y}
+            circuitId={ctxMenu.circuitId}
+            currentGroupId={ctxMenu.currentGroupId}
+            rcdGroups={rcdGroups}
+            verteilerId={ctxMenu.verteilerId}
+            onSelect={(groupId) => {
+              setRcdGroupOverride(ctxMenu.circuitId, groupId);
+              setCtxMenu(null);
+            }}
+            onClose={() => setCtxMenu(null)}
+          />
+        )}
+        </>
       )}
     </div>
   );

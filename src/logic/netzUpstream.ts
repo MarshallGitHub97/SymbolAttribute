@@ -26,6 +26,14 @@ export function findNetzForVerteiler(
   return netzKonfigurationen.find((n) => n.verteilerIds.includes(verteilerId));
 }
 
+/** Find ALL NetzKonfigurationen that include a given verteilerId. */
+export function findAllNetzeForVerteiler(
+  netzKonfigurationen: NetzKonfiguration[],
+  verteilerId: string,
+): NetzKonfiguration[] {
+  return netzKonfigurationen.filter((n) => n.verteilerIds.includes(verteilerId));
+}
+
 /**
  * Resolve the upstream protection chain from a NetzKonfiguration.
  * Order: Einspeisung -> SLS -> SPD(vor_zaehler) -> Zaehler -> SPD(nach_zaehler) -> Hauptschalter

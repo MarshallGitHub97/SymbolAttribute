@@ -9,6 +9,8 @@ import type {
   CircuitGroupOverride,
   ProtectionRequirement,
   DerivedCircuit,
+  RcdGroupOverride,
+  RcdGroupingStrategy,
   Kabel,
   SelectionTarget,
   NetzKonfiguration,
@@ -19,6 +21,8 @@ import { NETZWERK_TYP_LABELS } from '../types';
 import { symbolCatalog } from '../data/mockSymbols';
 import { mockGebaeude } from '../data/mockProject';
 import { deriveCircuits } from '../logic/circuitDerivation';
+import { groupBySharedRcd } from '../logic/rcdGrouping';
+import type { RcdGroup } from '../logic/rcdGrouping';
 
 interface AppState {
   gebaeude: Gebaeude;
@@ -30,6 +34,15 @@ interface AppState {
   interactionMode: 'default' | 'kabel';
   kabelDraft: string[];
   activeView: ViewType;
+
+  // RCD grouping
+  maxLssPerRcd: number;
+  rcdGroupOverrides: RcdGroupOverride[];
+  rcdGroupingStrategy: RcdGroupingStrategy;
+  setMaxLssPerRcd: (value: number) => void;
+  setRcdGroupingStrategy: (patch: Partial<RcdGroupingStrategy>) => void;
+  setRcdGroupOverride: (circuitId: string, rcdGroupId: string | null) => void;
+  resetAllRcdGroupOverrides: () => void;
 
   addSymbol: (symbolKey: string, raumId: string, x: number, y: number) => void;
   updateSymbol: (id: string, patch: Partial<PlacedSymbol>) => void;
@@ -76,7 +89,7 @@ interface AppState {
 
 export const useAppStore = create<AppState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       gebaeude: mockGebaeude,
       activeRaumId: 'r-wohn',
       placedSymbols: [],
@@ -87,11 +100,29 @@ export const useAppStore = create<AppState>()(
       kabelDraft: [] as string[],
       activeView: 'installationsplan' as ViewType,
 
+      // RCD grouping defaults
+      maxLssPerRcd: 6,
+      rcdGroupOverrides: [],
+      rcdGroupingStrategy: { separateByRoom: false, separateByRatedCurrent: false, separateByType: false },
+
+      setMaxLssPerRcd: (value) => set({ maxLssPerRcd: Math.max(value, 1) }),
+      setRcdGroupingStrategy: (patch) =>
+        set((s) => ({ rcdGroupingStrategy: { ...s.rcdGroupingStrategy, ...patch } })),
+
+      setRcdGroupOverride: (circuitId, rcdGroupId) =>
+        set((s) => {
+          const filtered = s.rcdGroupOverrides.filter((o) => o.circuitId !== circuitId);
+          if (rcdGroupId == null) return { rcdGroupOverrides: filtered };
+          return { rcdGroupOverrides: [...filtered, { circuitId, rcdGroupId }] };
+        }),
+
+      resetAllRcdGroupOverrides: () => set({ rcdGroupOverrides: [] }),
+
       // Netzstruktur defaults
       netzKonfigurationen: [{
         id: 'default-netz',
         netzwerkTyp: '230_400v',
-        bezeichnung: '230/400V Hauptnetz',
+        bezeichnung: '230/400V Versorgung 1',
         notiz: '',
         leitungstyp: 'NYY-J',
         querschnitt: 16,
@@ -277,11 +308,11 @@ export const useAppStore = create<AppState>()(
       finishKabelDraft: () =>
         set((s) => {
           if (s.kabelDraft.length < 2) return { kabelDraft: [] };
-          const firstSym = s.placedSymbols.find((sym) => sym.id === s.kabelDraft[0]);
-          const firstDef = firstSym ? symbolCatalog.find((d) => d.key === firstSym.symbolKey) : null;
+          const targetSym = s.placedSymbols.find((sym) => sym.id === s.kabelDraft[s.kabelDraft.length - 1]);
+          const targetDef = targetSym ? symbolCatalog.find((d) => d.key === targetSym.symbolKey) : null;
           const kabel: Kabel = {
             id: crypto.randomUUID(),
-            kabeltyp: firstDef?.defaultKabeltyp ?? 'NYM-J 3x1,5',
+            kabeltyp: targetDef?.defaultKabeltyp ?? 'NYM-J 3x1,5',
             connectedSymbolIds: [...s.kabelDraft],
             coreAssignments: [],
           };
@@ -298,20 +329,21 @@ export const useAppStore = create<AppState>()(
       // --- Netzstruktur actions ---
 
       addNetzKonfiguration: (typ) => {
+        const existing = get().netzKonfigurationen.filter((n) => n.netzwerkTyp === typ).length;
         const id = crypto.randomUUID();
         const netz: NetzKonfiguration = {
           id,
           netzwerkTyp: typ,
-          bezeichnung: NETZWERK_TYP_LABELS[typ],
+          bezeichnung: `${NETZWERK_TYP_LABELS[typ]} ${existing + 1}`,
           notiz: '',
-          leitungstyp: typ === '230_400v' ? 'NYY-J' : '',
-          querschnitt: typ === '230_400v' ? 16 : 0,
+          leitungstyp: 'NYY-J',
+          querschnitt: 16,
           einspeisung: { netzform: 'TN-S_5pol', alsKlemmenblock: false },
-          zaehlervorsicherung: { enabled: typ === '230_400v', ampere: 63, deviceId: 'sls-63a-3p' },
-          zaehler: { enabled: typ === '230_400v', deviceId: 'meter-4p' },
-          hauptschalter: { enabled: typ === '230_400v', ampere: 63, deviceId: 'main-switch-3p-63a' },
+          zaehlervorsicherung: { enabled: true, ampere: 63, deviceId: 'sls-63a-3p' },
+          zaehler: { enabled: true, deviceId: 'meter-4p' },
+          hauptschalter: { enabled: true, ampere: 63, deviceId: 'main-switch-3p-63a' },
           ueberspannungsschutz: {
-            enabled: typ === '230_400v',
+            enabled: true,
             position: 'vor_zaehler',
             deviceId: 'spd-4p',
             vorsicherung: { enabled: false, ampere: 63 },
@@ -380,7 +412,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'symbol-attribute-store',
-      version: 5,
+      version: 8,
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
 
@@ -451,7 +483,7 @@ export const useAppStore = create<AppState>()(
           state.netzKonfigurationen = [{
             id: 'default-netz',
             netzwerkTyp: '230_400v',
-            bezeichnung: '230/400V Hauptnetz',
+            bezeichnung: '230/400V Versorgung 1',
             notiz: '',
             leitungstyp: 'NYY-J',
             querschnitt: 16,
@@ -469,6 +501,31 @@ export const useAppStore = create<AppState>()(
           }];
           state.verteiler = [{ id: 'HV-EG', name: 'Hauptverteiler EG' }];
           state.activeNetzKonfigId = null;
+        }
+
+        // v6: rename "230/400V Netz/Hauptnetz" → "230/400V Versorgung", remove non-230_400v types
+        if (version <= 5) {
+          const configs = state.netzKonfigurationen as Array<Record<string, unknown>> ?? [];
+          const kept = configs.filter((n) => n.netzwerkTyp === '230_400v');
+          let idx = 1;
+          state.netzKonfigurationen = kept.map((n) => {
+            if (n.bezeichnung === '230/400V Hauptnetz' || n.bezeichnung === '230/400V Netz') {
+              return { ...n, bezeichnung: `230/400V Versorgung ${idx++}` };
+            }
+            idx++;
+            return n;
+          });
+        }
+
+        // v7: RCD grouping state
+        if (version <= 6) {
+          state.maxLssPerRcd = 6;
+          state.rcdGroupOverrides = [];
+        }
+
+        // v8: RCD grouping strategy toggles
+        if (version <= 7) {
+          state.rcdGroupingStrategy = { separateByRoom: false, separateByRatedCurrent: false, separateByType: false };
         }
 
         return state;
@@ -542,6 +599,18 @@ export const useDerivedCircuits = (): DerivedCircuit[] => {
   return useMemo(
     () => deriveCircuits({ placedSymbols, symbolCatalog, gebaeude, circuitGroupOverrides, kabel }),
     [placedSymbols, gebaeude, circuitGroupOverrides, kabel],
+  );
+};
+
+export const useRcdGroups = (): RcdGroup[] => {
+  const derivedCircuits = useDerivedCircuits();
+  const maxLssPerRcd = useAppStore((s) => s.maxLssPerRcd);
+  const rcdGroupOverrides = useAppStore((s) => s.rcdGroupOverrides);
+  const rcdGroupingStrategy = useAppStore((s) => s.rcdGroupingStrategy);
+
+  return useMemo(
+    () => groupBySharedRcd(derivedCircuits, { maxLssPerRcd, manualOverrides: rcdGroupOverrides, strategy: rcdGroupingStrategy }),
+    [derivedCircuits, maxLssPerRcd, rcdGroupOverrides, rcdGroupingStrategy],
   );
 };
 

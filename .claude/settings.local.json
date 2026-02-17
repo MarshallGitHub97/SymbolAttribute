@@ -21,7 +21,14 @@
       "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npx tsc -b --noEmit 2>&1\")",
       "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npx vite build 2>&1\")",
       "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npx tsc -b 2>&1 && echo TSC_OK && npx vite build 2>&1 && echo VITE_OK\")",
-      "Bash(cmd /c \"cd c:\\\\Dev\\\\SymbolAttribute & npx tsc --noEmit\")"
+      "Bash(cmd /c \"cd c:\\\\Dev\\\\SymbolAttribute & npx tsc --noEmit\")",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npm run build\")",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute & npx tsc -b 2>&1\")",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute & npx vite build 2>&1\")",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npx tsc -b --noEmit 2>&1 && echo BUILD_OK\")",
+      "Bash(Select-String -NotMatch \"mockSymbols\")",
+      "Bash(npx.cmd tsc:*)",
+      "Bash(cmd /c \"cd /d c:\\\\Dev\\\\SymbolAttribute && npx tsc -b\")"
     ]
   }
 }

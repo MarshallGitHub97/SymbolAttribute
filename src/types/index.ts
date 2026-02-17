@@ -158,6 +158,17 @@ export interface CircuitGroupOverride {
   locked: boolean;
 }
 
+export interface RcdGroupOverride {
+  circuitId: string;
+  rcdGroupId: string | null;
+}
+
+export interface RcdGroupingStrategy {
+  separateByRoom: boolean;
+  separateByRatedCurrent: boolean;
+  separateByType: boolean;
+}
+
 export type CabinetFieldType = 'NAR' | 'APZ' | 'ZF' | 'ARR' | 'RfZ' | 'VF';
 
 export const CABINET_FIELD_LABELS: Record<CabinetFieldType, string> = {
@@ -296,23 +307,10 @@ export type SelectionTarget =
 
 // --- Netzstruktur (Network Infrastructure) ---
 
-export type NetzwerkTyp =
-  | '230_400v'
-  | 'kleinspannung'
-  | 'konventionell'
-  | 'knx'
-  | 'loxone'
-  | 'reg_bussysteme'
-  | 'direktverbinder';
+export type NetzwerkTyp = '230_400v';
 
 export const NETZWERK_TYP_LABELS: Record<NetzwerkTyp, string> = {
-  '230_400v': '230/400V Netz',
-  kleinspannung: 'Kleinspannung',
-  konventionell: 'Komponenten f. konventionelle Installation',
-  knx: 'KNX-Komponenten',
-  loxone: 'Loxone Komponenten',
-  reg_bussysteme: 'Weitere REG-Geräte und Bussysteme',
-  direktverbinder: 'Direktverbinder',
+  '230_400v': '230/400V Versorgung',
 };
 
 export type Netzform =
